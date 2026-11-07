@@ -6,7 +6,6 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import (
-    BackgroundTasks,
     Depends,
     FastAPI,
     File,
@@ -20,9 +19,10 @@ from fastapi.templating import Jinja2Templates
 from PIL import Image, UnidentifiedImageError
 from sqlalchemy.orm import Session
 
-from app.database import Base, SessionLocal, engine, get_db
+from app.database import Base, engine, get_db
 from app.models import Task, utc_now
-from app.services.vision import run_comparison
+from app.queue import get_queue
+from app.tasks import process_task_job
 
 
 APP_DIR = Path(__file__).resolve().parent
@@ -46,7 +46,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="Lingjing Stage 3 Vision Comparison",
-    version="0.3.0",
+    version="0.4.0",
     lifespan=lifespan,
 )
 
@@ -75,33 +75,6 @@ def task_to_dict(task: Task) -> dict[str, object]:
     }
 
 
-def process_task(task_id: str, image_path: Path) -> None:
-    with SessionLocal() as database:
-        task = database.get(Task, task_id)
-        if task is None:
-            return
-
-        task.status = "processing"
-        task.updated_at = utc_now()
-        database.commit()
-
-        try:
-            result_dir = RESULT_DIR / task_id
-            result = run_comparison(image_path, result_dir)
-        except Exception as error:
-            task.status = "failed"
-            task.error = str(error)
-            task.updated_at = utc_now()
-            database.commit()
-            return
-
-        task.status = "completed"
-        task.result = result
-        task.error = None
-        task.updated_at = utc_now()
-        database.commit()
-
-
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request) -> HTMLResponse:
     return templates.TemplateResponse(
@@ -116,13 +89,12 @@ async def health() -> dict[str, str]:
     return {
         "status": "ok",
         "service": "lingjing-stage3-web",
-        "version": "0.3.0",
+        "version": "0.4.0",
     }
 
 
 @app.post("/api/tasks", status_code=202)
 async def create_task(
-    background_tasks: BackgroundTasks,
     image: UploadFile = File(...),
     database: Session = Depends(get_db),
 ) -> dict[str, object]:
@@ -176,7 +148,26 @@ async def create_task(
     database.commit()
     database.refresh(task)
 
-    background_tasks.add_task(process_task, task.id, saved_path)
+    try:
+        get_queue().enqueue(
+            process_task_job,
+            task.id,
+            str(saved_path),
+            job_id=task.id,
+            job_timeout=600,
+            result_ttl=3600,
+            failure_ttl=86400,
+        )
+    except Exception as error:
+        task.status = "failed"
+        task.error = f"任务入队失败: {error}"
+        task.updated_at = utc_now()
+        database.commit()
+        raise HTTPException(
+            status_code=503,
+            detail="任务队列暂不可用。",
+        ) from error
+
     return task_to_dict(task)
 
 

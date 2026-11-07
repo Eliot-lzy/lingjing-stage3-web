@@ -1,7 +1,31 @@
 name: lingjing-stage3
 
 services:
+  redis:
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test:
+        - CMD
+        - redis-cli
+        - ping
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
   web:
+    image: lingjing-stage3-web:latest
     build:
       context: .
       dockerfile: Dockerfile
@@ -10,10 +34,14 @@ services:
     restart: unless-stopped
     environment:
       TZ: Asia/Shanghai
+      REDIS_URL: redis://redis:6379/0
     volumes:
       - ./data:/app/data
     expose:
       - "8000"
+    depends_on:
+      redis:
+        condition: service_healthy
     healthcheck:
       test:
         - CMD
@@ -29,11 +57,37 @@ services:
         max-size: 10m
         max-file: "3"
 
+  worker:
+    image: lingjing-stage3-web:latest
+    restart: unless-stopped
+    command:
+      - rq
+      - worker
+      - --url
+      - redis://redis:6379/0
+      - vision
+    env_file:
+      - .env
+    environment:
+      TZ: Asia/Shanghai
+      REDIS_URL: redis://redis:6379/0
+    volumes:
+      - ./data:/app/data
+    depends_on:
+      redis:
+        condition: service_healthy
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
   nginx:
     image: nginx:1.27-alpine
     restart: unless-stopped
     depends_on:
-      - web
+      web:
+        condition: service_started
     ports:
       - "80:80"
     volumes:
@@ -43,3 +97,6 @@ services:
       options:
         max-size: 10m
         max-file: "3"
+
+volumes:
+  redis_data:
