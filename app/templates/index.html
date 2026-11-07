@@ -84,95 +84,150 @@
     </main>
 
     <script>
-        const form = document.getElementById("upload-form");
-        const input = document.getElementById("image-input");
-        const fileTitle = document.getElementById("file-title");
-        const fileMeta = document.getElementById("file-meta");
-        const submitButton = document.getElementById("submit-button");
-        const statusPanel = document.getElementById("status-panel");
-        const details = document.getElementById("result-details");
-        const serviceState = document.getElementById("service-state");
+    const form = document.getElementById("upload-form");
+    const input = document.getElementById("image-input");
+    const fileTitle = document.getElementById("file-title");
+    const fileMeta = document.getElementById("file-meta");
+    const submitButton = document.getElementById("submit-button");
+    const statusPanel = document.getElementById("status-panel");
+    const details = document.getElementById("result-details");
+    const serviceState = document.getElementById("service-state");
 
-        const setStatus = (label, copy, tone = "neutral") => {
-            statusPanel.className = `status-panel status-${tone}`;
-            statusPanel.innerHTML = "";
+    const STATUS_LABELS = {
+        queued: "任务已进入队列",
+        processing: "正在处理图片",
+        completed: "处理完成",
+        failed: "处理失败",
+    };
 
-            const labelElement = document.createElement("p");
-            labelElement.className = "status-label";
-            labelElement.textContent = label;
+    const setStatus = (label, copy, tone = "neutral") => {
+        statusPanel.className = `status-panel status-${tone}`;
+        statusPanel.innerHTML = "";
 
-            const copyElement = document.createElement("p");
-            copyElement.className = "status-copy";
-            copyElement.textContent = copy;
+        const labelElement = document.createElement("p");
+        labelElement.className = "status-label";
+        labelElement.textContent = label;
 
-            statusPanel.append(labelElement, copyElement);
-        };
+        const copyElement = document.createElement("p");
+        copyElement.className = "status-copy";
+        copyElement.textContent = copy;
 
-        const checkHealth = async () => {
-            try {
-                const response = await fetch("/api/health", { cache: "no-store" });
-                if (!response.ok) throw new Error("Health check failed");
+        statusPanel.append(labelElement, copyElement);
+    };
 
-                serviceState.className = "service-state is-online";
-                serviceState.lastElementChild.textContent = "服务正常";
-            } catch {
-                serviceState.className = "service-state is-offline";
-                serviceState.lastElementChild.textContent = "服务不可用";
+    const updateDetails = (task) => {
+        document.getElementById("result-id").textContent = task.id;
+        document.getElementById("result-size").textContent =
+            `${task.width} × ${task.height}`;
+        document.getElementById("result-format").textContent = task.image_format;
+        document.getElementById("result-bytes").textContent =
+            `${(task.size_bytes / 1024 / 1024).toFixed(2)} MB`;
+        details.hidden = false;
+    };
+
+    const checkHealth = async () => {
+        try {
+            const response = await fetch("/api/health", { cache: "no-store" });
+            if (!response.ok) throw new Error("Health check failed");
+
+            serviceState.className = "service-state is-online";
+            serviceState.lastElementChild.textContent = "服务正常";
+        } catch {
+            serviceState.className = "service-state is-offline";
+            serviceState.lastElementChild.textContent = "服务不可用";
+        }
+    };
+
+    const pollTask = async (taskId) => {
+        for (let attempt = 0; attempt < 200; attempt += 1) {
+            const response = await fetch(`/api/tasks/${taskId}`, {
+                cache: "no-store",
+            });
+            const task = await response.json();
+
+            if (!response.ok) {
+                throw new Error(task.detail || "无法查询任务状态");
             }
-        };
 
-        input.addEventListener("change", () => {
-            const file = input.files?.[0];
-            if (!file) return;
+            updateDetails(task);
 
-            fileTitle.textContent = file.name;
-            fileMeta.textContent = `${(file.size / 1024 / 1024).toFixed(2)} MB`;
-        });
+            if (task.status === "completed") {
+                const result = task.result || {};
+                const traditional = result.traditional || {};
+                const multimodal = result.multimodal || {};
 
-        form.addEventListener("submit", async (event) => {
-            event.preventDefault();
-
-            const file = input.files?.[0];
-            if (!file) return;
-
-            submitButton.disabled = true;
-            submitButton.textContent = "正在上传";
-            details.hidden = true;
-            setStatus("正在上传", "请稍候，服务器正在接收图片。", "busy");
-
-            const body = new FormData();
-            body.append("image", file);
-
-            try {
-                const response = await fetch("/api/upload", {
-                    method: "POST",
-                    body,
-                });
-
-                const payload = await response.json();
-
-                if (!response.ok) {
-                    throw new Error(payload.detail || "上传失败");
-                }
-
-                document.getElementById("result-id").textContent = payload.upload_id;
-                document.getElementById("result-size").textContent =
-                    `${payload.width} × ${payload.height}`;
-                document.getElementById("result-format").textContent = payload.format;
-                document.getElementById("result-bytes").textContent =
-                    `${(payload.size_bytes / 1024 / 1024).toFixed(2)} MB`;
-
-                details.hidden = false;
-                setStatus("图片已接收", payload.message, "success");
-            } catch (error) {
-                setStatus("处理失败", error.message, "error");
-            } finally {
-                submitButton.disabled = false;
-                submitButton.textContent = "上传并检查";
+                setStatus(
+                    "处理完成",
+                    `传统方案 ${traditional.object_count ?? 0} 个目标，` +
+                    `多模态方案：${multimodal.summary ?? "暂无摘要"}`,
+                    "success",
+                );
+                return;
             }
-        });
 
-        checkHealth();
-    </script>
+            if (task.status === "failed") {
+                throw new Error(task.error || "任务处理失败");
+            }
+
+            setStatus(
+                STATUS_LABELS[task.status] || "处理中",
+                "服务器正在处理图片，请保持页面打开。",
+                "busy",
+            );
+
+            await new Promise((resolve) => setTimeout(resolve, 1500));
+        }
+
+        throw new Error("任务处理超时");
+    };
+
+    input.addEventListener("change", () => {
+        const file = input.files?.[0];
+        if (!file) return;
+
+        fileTitle.textContent = file.name;
+        fileMeta.textContent = `${(file.size / 1024 / 1024).toFixed(2)} MB`;
+    });
+
+    form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+
+        const file = input.files?.[0];
+        if (!file) return;
+
+        submitButton.disabled = true;
+        submitButton.textContent = "正在创建任务";
+        details.hidden = true;
+        setStatus("正在上传", "服务器正在接收图片。", "busy");
+
+        const body = new FormData();
+        body.append("image", file);
+
+        try {
+            const response = await fetch("/api/tasks", {
+                method: "POST",
+                body,
+            });
+            const task = await response.json();
+
+            if (!response.ok) {
+                throw new Error(task.detail || "创建任务失败");
+            }
+
+            updateDetails(task);
+            setStatus("任务已创建", "服务器开始处理图片。", "busy");
+
+            submitButton.textContent = "正在处理";
+            await pollTask(task.id);
+        } catch (error) {
+            setStatus("处理失败", error.message, "error");
+        } finally {
+            submitButton.disabled = false;
+            submitButton.textContent = "上传并检查";
+        }
+    });
+
+    checkHealth();
+</script>
 </body>
 </html>
