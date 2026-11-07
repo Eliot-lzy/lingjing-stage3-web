@@ -21,7 +21,7 @@
     </header>
 
     <main class="workspace">
-        <section class="upload-section" aria-labelledby="upload-title">
+        <section class="tool-panel" aria-labelledby="upload-title">
             <div class="section-heading">
                 <div>
                     <p class="section-index">01 / 输入</p>
@@ -40,26 +40,26 @@
                         required
                     >
                     <strong id="file-title">点击选择图片</strong>
-                    <span id="file-meta">图片只在本次任务中处理</span>
+                    <span id="file-meta">图片将在服务器中处理</span>
                 </label>
 
                 <button id="submit-button" class="primary-button" type="submit">
-                    上传并检查
+                    开始对比
                 </button>
             </form>
         </section>
 
-        <section class="result-section" aria-labelledby="result-title">
+        <section class="tool-panel" aria-labelledby="result-title">
             <div class="section-heading">
                 <div>
                     <p class="section-index">02 / 状态</p>
-                    <h2 id="result-title">处理结果</h2>
+                    <h2 id="result-title">任务状态</h2>
                 </div>
             </div>
 
             <div id="status-panel" class="status-panel" aria-live="polite">
                 <p class="status-label">等待上传</p>
-                <p class="status-copy">上传成功后，这里会显示图片信息和任务状态。</p>
+                <p class="status-copy">选择图片后开始创建对比任务。</p>
             </div>
 
             <dl id="result-details" class="result-details" hidden>
@@ -83,151 +83,299 @@
         </section>
     </main>
 
+    <section id="comparison-panel" class="comparison-band" hidden>
+        <div class="comparison-inner">
+            <div class="comparison-heading">
+                <div>
+                    <p class="section-index">03 / 对比</p>
+                    <h2>同一张图片的两种视觉方案</h2>
+                </div>
+                <p id="comparison-task-id" class="comparison-task-id"></p>
+            </div>
+
+            <div class="comparison-grid">
+                <figure class="result-panel">
+                    <div class="panel-heading">
+                        <h3>YOLO + MobileSAM</h3>
+                        <p id="traditional-model"></p>
+                    </div>
+
+                    <img
+                        id="traditional-image"
+                        class="traditional-image"
+                        alt="YOLO 检测与 MobileSAM 分割结果"
+                    >
+
+                    <figcaption id="traditional-meta"></figcaption>
+                </figure>
+
+                <section class="result-panel">
+                    <div class="panel-heading">
+                        <h3>视觉大模型</h3>
+                        <p id="multimodal-model"></p>
+                    </div>
+
+                    <p id="multimodal-summary" class="multimodal-summary"></p>
+
+                    <ul id="multimodal-items" class="item-list"></ul>
+
+                    <p id="multimodal-error" class="result-error" hidden></p>
+                </section>
+            </div>
+
+            <dl class="metrics">
+                <div>
+                    <dt>YOLO + SAM 耗时</dt>
+                    <dd id="traditional-time">-</dd>
+                </div>
+                <div>
+                    <dt>大模型耗时</dt>
+                    <dd id="multimodal-time">-</dd>
+                </div>
+                <div>
+                    <dt>传统方案目标数</dt>
+                    <dd id="traditional-count">-</dd>
+                </div>
+                <div>
+                    <dt>大模型物品总数</dt>
+                    <dd id="multimodal-count">-</dd>
+                </div>
+            </dl>
+        </div>
+    </section>
+
     <script>
-    const form = document.getElementById("upload-form");
-    const input = document.getElementById("image-input");
-    const fileTitle = document.getElementById("file-title");
-    const fileMeta = document.getElementById("file-meta");
-    const submitButton = document.getElementById("submit-button");
-    const statusPanel = document.getElementById("status-panel");
-    const details = document.getElementById("result-details");
-    const serviceState = document.getElementById("service-state");
+        const form = document.getElementById("upload-form");
+        const input = document.getElementById("image-input");
+        const fileTitle = document.getElementById("file-title");
+        const fileMeta = document.getElementById("file-meta");
+        const submitButton = document.getElementById("submit-button");
+        const statusPanel = document.getElementById("status-panel");
+        const details = document.getElementById("result-details");
+        const serviceState = document.getElementById("service-state");
+        const comparisonPanel = document.getElementById("comparison-panel");
 
-    const STATUS_LABELS = {
-        queued: "任务已进入队列",
-        processing: "正在处理图片",
-        completed: "处理完成",
-        failed: "处理失败",
-    };
+        const STATUS_LABELS = {
+            queued: "任务已进入队列",
+            processing: "正在处理图片",
+            completed: "处理完成",
+            failed: "处理失败",
+        };
 
-    const setStatus = (label, copy, tone = "neutral") => {
-        statusPanel.className = `status-panel status-${tone}`;
-        statusPanel.innerHTML = "";
+        const setStatus = (label, copy, tone = "neutral") => {
+            statusPanel.className = `status-panel status-${tone}`;
+            statusPanel.innerHTML = "";
 
-        const labelElement = document.createElement("p");
-        labelElement.className = "status-label";
-        labelElement.textContent = label;
+            const labelElement = document.createElement("p");
+            labelElement.className = "status-label";
+            labelElement.textContent = label;
 
-        const copyElement = document.createElement("p");
-        copyElement.className = "status-copy";
-        copyElement.textContent = copy;
+            const copyElement = document.createElement("p");
+            copyElement.className = "status-copy";
+            copyElement.textContent = copy;
 
-        statusPanel.append(labelElement, copyElement);
-    };
+            statusPanel.append(labelElement, copyElement);
+        };
 
-    const updateDetails = (task) => {
-        document.getElementById("result-id").textContent = task.id;
-        document.getElementById("result-size").textContent =
-            `${task.width} × ${task.height}`;
-        document.getElementById("result-format").textContent = task.image_format;
-        document.getElementById("result-bytes").textContent =
-            `${(task.size_bytes / 1024 / 1024).toFixed(2)} MB`;
-        details.hidden = false;
-    };
+        const updateDetails = (task) => {
+            document.getElementById("result-id").textContent = task.id;
+            document.getElementById("result-size").textContent =
+                `${task.width} × ${task.height}`;
+            document.getElementById("result-format").textContent = task.image_format;
+            document.getElementById("result-bytes").textContent =
+                `${(task.size_bytes / 1024 / 1024).toFixed(2)} MB`;
+            details.hidden = false;
+        };
 
-    const checkHealth = async () => {
-        try {
-            const response = await fetch("/api/health", { cache: "no-store" });
-            if (!response.ok) throw new Error("Health check failed");
+        const formatSeconds = (value) => {
+            const number = Number(value);
+            return Number.isFinite(number) ? `${number.toFixed(2)} 秒` : "-";
+        };
 
-            serviceState.className = "service-state is-online";
-            serviceState.lastElementChild.textContent = "服务正常";
-        } catch {
-            serviceState.className = "service-state is-offline";
-            serviceState.lastElementChild.textContent = "服务不可用";
-        }
-    };
+        const renderMultimodalItems = (items) => {
+            const list = document.getElementById("multimodal-items");
+            list.innerHTML = "";
 
-    const pollTask = async (taskId) => {
-        for (let attempt = 0; attempt < 200; attempt += 1) {
-            const response = await fetch(`/api/tasks/${taskId}`, {
-                cache: "no-store",
-            });
-            const task = await response.json();
-
-            if (!response.ok) {
-                throw new Error(task.detail || "无法查询任务状态");
-            }
-
-            updateDetails(task);
-
-            if (task.status === "completed") {
-                const result = task.result || {};
-                const traditional = result.traditional || {};
-                const multimodal = result.multimodal || {};
-
-                setStatus(
-                    "处理完成",
-                    `传统方案 ${traditional.object_count ?? 0} 个目标，` +
-                    `多模态方案：${multimodal.summary ?? "暂无摘要"}`,
-                    "success",
-                );
+            if (!Array.isArray(items) || items.length === 0) {
+                const empty = document.createElement("li");
+                empty.className = "item-empty";
+                empty.textContent = "没有返回结构化物品。";
+                list.append(empty);
                 return;
             }
 
-            if (task.status === "failed") {
-                throw new Error(task.error || "任务处理失败");
-            }
+            items.forEach((item) => {
+                const row = document.createElement("li");
+                row.className = "item-row";
 
-            setStatus(
-                STATUS_LABELS[task.status] || "处理中",
-                "服务器正在处理图片，请保持页面打开。",
-                "busy",
-            );
+                const main = document.createElement("div");
+                const name = document.createElement("strong");
+                name.textContent = item.name || "未知物品";
+                main.append(name);
 
-            await new Promise((resolve) => setTimeout(resolve, 1500));
-        }
+                if (item.location) {
+                    const location = document.createElement("span");
+                    location.textContent = item.location;
+                    main.append(location);
+                }
 
-        throw new Error("任务处理超时");
-    };
-
-    input.addEventListener("change", () => {
-        const file = input.files?.[0];
-        if (!file) return;
-
-        fileTitle.textContent = file.name;
-        fileMeta.textContent = `${(file.size / 1024 / 1024).toFixed(2)} MB`;
-    });
-
-    form.addEventListener("submit", async (event) => {
-        event.preventDefault();
-
-        const file = input.files?.[0];
-        if (!file) return;
-
-        submitButton.disabled = true;
-        submitButton.textContent = "正在创建任务";
-        details.hidden = true;
-        setStatus("正在上传", "服务器正在接收图片。", "busy");
-
-        const body = new FormData();
-        body.append("image", file);
-
-        try {
-            const response = await fetch("/api/tasks", {
-                method: "POST",
-                body,
+                const count = document.createElement("b");
+                count.textContent = `x${item.count ?? "?"}`;
+                row.append(main, count);
+                list.append(row);
             });
-            const task = await response.json();
+        };
 
-            if (!response.ok) {
-                throw new Error(task.detail || "创建任务失败");
+        const renderComparison = (task) => {
+            const result = task.result || {};
+            const traditional = result.traditional || {};
+            const multimodal = result.multimodal || {};
+
+            comparisonPanel.hidden = false;
+            document.getElementById("comparison-task-id").textContent = task.id;
+
+            document.getElementById("traditional-model").textContent =
+                traditional.model || "YOLO + MobileSAM";
+            document.getElementById("traditional-count").textContent =
+                traditional.object_count ?? "0";
+            document.getElementById("traditional-time").textContent =
+                formatSeconds(traditional.elapsed_seconds);
+            document.getElementById("traditional-meta").textContent =
+                `检测 ${traditional.object_count ?? 0} 个目标，生成 ` +
+                `${traditional.mask_count ?? 0} 个分割掩膜`;
+
+            const image = document.getElementById("traditional-image");
+            if (traditional.result_image) {
+                image.src = `/results/${task.id}/${encodeURIComponent(traditional.result_image)}`;
+                image.hidden = false;
+            } else {
+                image.removeAttribute("src");
+                image.hidden = true;
             }
 
-            updateDetails(task);
-            setStatus("任务已创建", "服务器开始处理图片。", "busy");
+            document.getElementById("multimodal-model").textContent =
+                multimodal.model || "视觉语言模型";
+            document.getElementById("multimodal-summary").textContent =
+                multimodal.summary || "模型没有返回场景摘要。";
+            document.getElementById("multimodal-count").textContent =
+                multimodal.item_count_sum ?? multimodal.total_objects ?? "0";
+            document.getElementById("multimodal-time").textContent =
+                formatSeconds(multimodal.elapsed_seconds);
+            renderMultimodalItems(multimodal.items);
 
-            submitButton.textContent = "正在处理";
-            await pollTask(task.id);
-        } catch (error) {
-            setStatus("处理失败", error.message, "error");
-        } finally {
-            submitButton.disabled = false;
-            submitButton.textContent = "上传并检查";
-        }
-    });
+            const modelError = document.getElementById("multimodal-error");
+            if (multimodal.error) {
+                modelError.textContent = multimodal.error;
+                modelError.hidden = false;
+            } else {
+                modelError.textContent = "";
+                modelError.hidden = true;
+            }
+        };
 
-    checkHealth();
-</script>
+        const checkHealth = async () => {
+            try {
+                const response = await fetch("/api/health", { cache: "no-store" });
+                if (!response.ok) throw new Error("Health check failed");
+
+                serviceState.className = "service-state is-online";
+                serviceState.lastElementChild.textContent = "服务正常";
+            } catch {
+                serviceState.className = "service-state is-offline";
+                serviceState.lastElementChild.textContent = "服务不可用";
+            }
+        };
+
+        const pollTask = async (taskId) => {
+            for (let attempt = 0; attempt < 200; attempt += 1) {
+                const response = await fetch(`/api/tasks/${taskId}`, {
+                    cache: "no-store",
+                });
+                const task = await response.json();
+
+                if (!response.ok) {
+                    throw new Error(task.detail || "无法查询任务状态");
+                }
+
+                updateDetails(task);
+
+                if (task.status === "completed") {
+                    renderComparison(task);
+                    const multimodal = task.result?.multimodal || {};
+                    const traditional = task.result?.traditional || {};
+                    setStatus(
+                        "处理完成",
+                        `传统方案 ${traditional.object_count ?? 0} 个目标，` +
+                        `多模态方案 ${multimodal.item_count_sum ?? 0} 个物品。`,
+                        "success",
+                    );
+                    return;
+                }
+
+                if (task.status === "failed") {
+                    throw new Error(task.error || "任务处理失败");
+                }
+
+                setStatus(
+                    STATUS_LABELS[task.status] || "处理中",
+                    "服务器正在运行检测、分割和视觉模型。",
+                    "busy",
+                );
+
+                await new Promise((resolve) => setTimeout(resolve, 1500));
+            }
+
+            throw new Error("任务处理超时");
+        };
+
+        input.addEventListener("change", () => {
+            const file = input.files?.[0];
+            if (!file) return;
+
+            fileTitle.textContent = file.name;
+            fileMeta.textContent = `${(file.size / 1024 / 1024).toFixed(2)} MB`;
+        });
+
+        form.addEventListener("submit", async (event) => {
+            event.preventDefault();
+
+            const file = input.files?.[0];
+            if (!file) return;
+
+            submitButton.disabled = true;
+            submitButton.textContent = "正在创建任务";
+            details.hidden = true;
+            comparisonPanel.hidden = true;
+            setStatus("正在上传", "服务器正在接收图片。", "busy");
+
+            const body = new FormData();
+            body.append("image", file);
+
+            try {
+                const response = await fetch("/api/tasks", {
+                    method: "POST",
+                    body,
+                });
+                const task = await response.json();
+
+                if (!response.ok) {
+                    throw new Error(task.detail || "创建任务失败");
+                }
+
+                updateDetails(task);
+                setStatus("任务已创建", "服务器开始处理图片。", "busy");
+
+                submitButton.textContent = "正在处理";
+                await pollTask(task.id);
+            } catch (error) {
+                setStatus("处理失败", error.message, "error");
+            } finally {
+                submitButton.disabled = false;
+                submitButton.textContent = "开始对比";
+            }
+        });
+
+        checkHealth();
+    </script>
 </body>
 </html>
