@@ -19,6 +19,7 @@ from openai import (
 
 DEFAULT_BASE_URL = "https://open.bigmodel.cn/api/paas/v4/"
 DEFAULT_MODEL = "glm-4.6v-flash"
+FALLBACK_MODEL = "glm-4v-flash"
 
 PROMPT = """
 你是桌面物品清点助手。只根据图片中清晰可见的内容回答。
@@ -129,61 +130,88 @@ def usage_dict(usage: Any) -> dict[str, Any] | None:
     return None
 
 
+def model_candidates(primary_model: str) -> list[str]:
+    models = [primary_model]
+    if primary_model != FALLBACK_MODEL:
+        models.append(FALLBACK_MODEL)
+    return models
+
+
+def max_tokens_for_model(model_name: str) -> int:
+    if model_name == FALLBACK_MODEL:
+        return 1024
+    return 4096
+
+
 def describe_image(image_path: Path, output_dir: Path) -> dict[str, Any]:
     api_key = os.getenv("ZHIPU_API_KEY", "").strip()
     if not api_key:
         raise RuntimeError("服务器未配置 ZHIPU_API_KEY")
 
+    if not api_key.isascii():
+        raise RuntimeError("ZHIPU_API_KEY 包含非 ASCII 字符")
+
     base_url = os.getenv("ZHIPU_BASE_URL", DEFAULT_BASE_URL).strip()
-    model_name = os.getenv("ZHIPU_VLM_MODEL", DEFAULT_MODEL).strip()
+    primary_model = os.getenv("ZHIPU_VLM_MODEL", DEFAULT_MODEL).strip()
 
     image_data_url, sent_width, sent_height = encode_image(image_path)
 
     client = OpenAI(
         api_key=api_key,
         base_url=base_url,
-        timeout=180.0,
+        timeout=90.0,
         max_retries=0,
     )
 
     start_time = time.perf_counter()
-    last_error: Exception | None = None
     response = None
+    used_model = ""
+    errors: list[str] = []
 
-    for attempt in range(1, 5):
-        try:
-            response = client.chat.completions.create(
-                model=model_name,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": (
-                            "你是严谨的图像观察助手，只回答图片中可见的内容。"
-                        ),
-                    },
-                    {
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "image_url",
-                                "image_url": {"url": image_data_url},
-                            },
-                            {"type": "text", "text": PROMPT},
-                        ],
-                    },
-                ],
-                temperature=0.1,
-                max_tokens=4096,
-            )
-            break
-        except (RateLimitError, APITimeoutError, APIConnectionError) as error:
-            last_error = error
-            if attempt >= 4:
+    for model_name in model_candidates(primary_model):
+        token_limit = max_tokens_for_model(model_name)
+
+        for attempt in range(1, 4):
+            try:
+                response = client.chat.completions.create(
+                    model=model_name,
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": (
+                                "你是严谨的图像观察助手，"
+                                "只回答图片中可见的内容。"
+                            ),
+                        },
+                        {
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "image_url",
+                                    "image_url": {"url": image_data_url},
+                                },
+                                {"type": "text", "text": PROMPT},
+                            ],
+                        },
+                    ],
+                    temperature=0.1,
+                    max_tokens=token_limit,
+                )
+                used_model = model_name
                 break
-            time.sleep(5 * (2 ** (attempt - 1)))
+            except (RateLimitError, APITimeoutError, APIConnectionError) as error:
+                errors.append(f"{model_name}: {error}")
+                if attempt < 3:
+                    time.sleep(3 * (2 ** (attempt - 1)))
+            except Exception as error:
+                errors.append(f"{model_name}: {error}")
+                break
+
+        if response is not None:
+            break
 
     if response is None:
-        raise RuntimeError(f"视觉模型请求失败: {last_error}")
+        raise RuntimeError("视觉模型请求失败: " + " | ".join(errors))
 
     elapsed_seconds = time.perf_counter() - start_time
     raw_text = message_text(response.choices[0].message.content)
@@ -195,7 +223,8 @@ def describe_image(image_path: Path, output_dir: Path) -> dict[str, Any]:
 
     if finish_reason == "length":
         raise RuntimeError(
-            "视觉模型输出达到 Token 上限，原始响应已保存到 multimodal_raw.txt"
+            "视觉模型输出达到 Token 上限，"
+            "原始响应已保存到 multimodal_raw.txt"
         )
 
     parsed = extract_json(raw_text)
@@ -206,8 +235,24 @@ def describe_image(image_path: Path, output_dir: Path) -> dict[str, Any]:
         if isinstance(item, dict)
     )
 
+    parsed_path = output_dir / "multimodal.json"
+    parsed_path.write_text(
+        json.dumps(
+            {
+                "model": used_model,
+                "result": parsed,
+                "finish_reason": finish_reason,
+                "usage": usage_dict(response.usage),
+            },
+            indent=2,
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
     return {
-        "model": model_name,
+        "model": used_model,
         "summary": parsed.get("scene_summary", ""),
         "items": items,
         "total_objects": parsed.get("total_objects", count_sum),
@@ -220,4 +265,5 @@ def describe_image(image_path: Path, output_dir: Path) -> dict[str, Any]:
         "finish_reason": finish_reason,
         "usage": usage_dict(response.usage),
         "raw_response_file": raw_path.name,
+        "parsed_result_file": parsed_path.name,
     }
