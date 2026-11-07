@@ -5,6 +5,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+    env_file:
+      - .env
     restart: unless-stopped
     environment:
       TZ: Asia/Shanghai
