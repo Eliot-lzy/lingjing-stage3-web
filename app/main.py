@@ -14,7 +14,7 @@ from fastapi import (
     Request,
     UploadFile,
 )
-from fastapi.responses import HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from PIL import Image, UnidentifiedImageError
@@ -22,7 +22,7 @@ from sqlalchemy.orm import Session
 
 from app.database import Base, SessionLocal, engine, get_db
 from app.models import Task, utc_now
-from app.services.comparison import run_comparison
+from app.services.vision import run_comparison
 
 
 APP_DIR = Path(__file__).resolve().parent
@@ -46,7 +46,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="Lingjing Stage 3 Vision Comparison",
-    version="0.2.0",
+    version="0.3.0",
     lifespan=lifespan,
 )
 
@@ -86,7 +86,8 @@ def process_task(task_id: str, image_path: Path) -> None:
         database.commit()
 
         try:
-            result = run_comparison(image_path)
+            result_dir = RESULT_DIR / task_id
+            result = run_comparison(image_path, result_dir)
         except Exception as error:
             task.status = "failed"
             task.error = str(error)
@@ -115,7 +116,7 @@ async def health() -> dict[str, str]:
     return {
         "status": "ok",
         "service": "lingjing-stage3-web",
-        "version": "0.2.0",
+        "version": "0.3.0",
     }
 
 
@@ -188,3 +189,23 @@ async def get_task(
     if task is None:
         raise HTTPException(status_code=404, detail="任务不存在。")
     return task_to_dict(task)
+
+
+@app.get("/results/{task_id}/{filename}")
+async def result_file(
+    task_id: str,
+    filename: str,
+) -> FileResponse:
+    if Path(task_id).name != task_id or Path(filename).name != filename:
+        raise HTTPException(status_code=404, detail="结果文件不存在。")
+
+    result_root = RESULT_DIR.resolve()
+    result_path = (RESULT_DIR / task_id / filename).resolve()
+
+    if not result_path.is_relative_to(result_root):
+        raise HTTPException(status_code=404, detail="结果文件不存在。")
+
+    if not result_path.is_file():
+        raise HTTPException(status_code=404, detail="结果文件不存在。")
+
+    return FileResponse(result_path)
