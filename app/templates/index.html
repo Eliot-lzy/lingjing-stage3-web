@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>灵境视觉方案对比</title>
+    <link rel="stylesheet" href="{{ url_for('static', path='/styles.css') }}">
+</head>
+<body>
+    <header class="site-header">
+        <div class="header-inner">
+            <div>
+                <p class="eyebrow">LINGJING STAGE 03</p>
+                <h1>视觉方案对比</h1>
+            </div>
+            <div class="service-state" id="service-state">
+                <span class="state-dot"></span>
+                <span>正在检查服务</span>
+            </div>
+        </div>
+    </header>
+
+    <main class="workspace">
+        <section class="upload-section" aria-labelledby="upload-title">
+            <div class="section-heading">
+                <div>
+                    <p class="section-index">01 / 输入</p>
+                    <h2 id="upload-title">选择一张桌面图片</h2>
+                </div>
+                <p class="limit">JPG、PNG、WEBP，最大 {{ max_upload_mb }} MB</p>
+            </div>
+
+            <form id="upload-form">
+                <label class="drop-zone" for="image-input">
+                    <input
+                        id="image-input"
+                        name="image"
+                        type="file"
+                        accept=".jpg,.jpeg,.png,.webp"
+                        required
+                    >
+                    <strong id="file-title">点击选择图片</strong>
+                    <span id="file-meta">图片只在本次任务中处理</span>
+                </label>
+
+                <button id="submit-button" class="primary-button" type="submit">
+                    上传并检查
+                </button>
+            </form>
+        </section>
+
+        <section class="result-section" aria-labelledby="result-title">
+            <div class="section-heading">
+                <div>
+                    <p class="section-index">02 / 状态</p>
+                    <h2 id="result-title">处理结果</h2>
+                </div>
+            </div>
+
+            <div id="status-panel" class="status-panel" aria-live="polite">
+                <p class="status-label">等待上传</p>
+                <p class="status-copy">上传成功后，这里会显示图片信息和任务状态。</p>
+            </div>
+
+            <dl id="result-details" class="result-details" hidden>
+                <div>
+                    <dt>任务编号</dt>
+                    <dd id="result-id"></dd>
+                </div>
+                <div>
+                    <dt>图片尺寸</dt>
+                    <dd id="result-size"></dd>
+                </div>
+                <div>
+                    <dt>文件格式</dt>
+                    <dd id="result-format"></dd>
+                </div>
+                <div>
+                    <dt>文件大小</dt>
+                    <dd id="result-bytes"></dd>
+                </div>
+            </dl>
+        </section>
+    </main>
+
+    <script>
+        const form = document.getElementById("upload-form");
+        const input = document.getElementById("image-input");
+        const fileTitle = document.getElementById("file-title");
+        const fileMeta = document.getElementById("file-meta");
+        const submitButton = document.getElementById("submit-button");
+        const statusPanel = document.getElementById("status-panel");
+        const details = document.getElementById("result-details");
+        const serviceState = document.getElementById("service-state");
+
+        const setStatus = (label, copy, tone = "neutral") => {
+            statusPanel.className = `status-panel status-${tone}`;
+            statusPanel.innerHTML = "";
+
+            const labelElement = document.createElement("p");
+            labelElement.className = "status-label";
+            labelElement.textContent = label;
+
+            const copyElement = document.createElement("p");
+            copyElement.className = "status-copy";
+            copyElement.textContent = copy;
+
+            statusPanel.append(labelElement, copyElement);
+        };
+
+        const checkHealth = async () => {
+            try {
+                const response = await fetch("/api/health", { cache: "no-store" });
+                if (!response.ok) throw new Error("Health check failed");
+
+                serviceState.className = "service-state is-online";
+                serviceState.lastElementChild.textContent = "服务正常";
+            } catch {
+                serviceState.className = "service-state is-offline";
+                serviceState.lastElementChild.textContent = "服务不可用";
+            }
+        };
+
+        input.addEventListener("change", () => {
+            const file = input.files?.[0];
+            if (!file) return;
+
+            fileTitle.textContent = file.name;
+            fileMeta.textContent = `${(file.size / 1024 / 1024).toFixed(2)} MB`;
+        });
+
+        form.addEventListener("submit", async (event) => {
+            event.preventDefault();
+
+            const file = input.files?.[0];
+            if (!file) return;
+
+            submitButton.disabled = true;
+            submitButton.textContent = "正在上传";
+            details.hidden = true;
+            setStatus("正在上传", "请稍候，服务器正在接收图片。", "busy");
+
+            const body = new FormData();
+            body.append("image", file);
+
+            try {
+                const response = await fetch("/api/upload", {
+                    method: "POST",
+                    body,
+                });
+
+                const payload = await response.json();
+
+                if (!response.ok) {
+                    throw new Error(payload.detail || "上传失败");
+                }
+
+                document.getElementById("result-id").textContent = payload.upload_id;
+                document.getElementById("result-size").textContent =
+                    `${payload.width} × ${payload.height}`;
+                document.getElementById("result-format").textContent = payload.format;
+                document.getElementById("result-bytes").textContent =
+                    `${(payload.size_bytes / 1024 / 1024).toFixed(2)} MB`;
+
+                details.hidden = false;
+                setStatus("图片已接收", payload.message, "success");
+            } catch (error) {
+                setStatus("处理失败", error.message, "error");
+            } finally {
+                submitButton.disabled = false;
+                submitButton.textContent = "上传并检查";
+            }
+        });
+
+        checkHealth();
+    </script>
+</body>
+</html>

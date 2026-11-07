@@ -1,0 +1,14 @@
+.git
+.gitignore
+.idea
+.vscode
+__pycache__
+*.pyc
+.env
+data
+outputs
+docs
+*.pt
+*.pth
+*.onnx
+*.engine
