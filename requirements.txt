@@ -6,6 +6,7 @@ jinja2==3.1.6
 python-multipart==0.0.20
 pillow==11.2.1
 sqlalchemy==2.0.41
+PyJWT==2.10.1
 
 torch==2.14.1+cpu
 torchvision==0.29.1+cpu

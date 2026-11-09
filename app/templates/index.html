@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>灵境视觉方案对比</title>
     <link rel="stylesheet" href="{{ url_for('static', path='/styles.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', path='/auth.css') }}">
 </head>
 <body>
     <header class="site-header">
@@ -13,9 +14,14 @@
                 <p class="eyebrow">LINGJING STAGE 03</p>
                 <h1>视觉方案对比</h1>
             </div>
-            <div class="service-state" id="service-state">
-                <span class="state-dot"></span>
-                <span>正在检查服务</span>
+            <div class="header-actions">
+                <a class="header-link" href="/history">历史记录</a>
+                <span class="user-email">{{ user_email }}</span>
+                <a class="header-link" href="/logout">退出</a>
+                <div class="service-state" id="service-state">
+                    <span class="state-dot"></span>
+                    <span>正在检查服务</span>
+                </div>
             </div>
         </div>
     </header>
@@ -328,6 +334,50 @@
             throw new Error("任务处理超时");
         };
 
+        const setTaskInUrl = (taskId) => {
+            const url = new URL(window.location.href);
+            url.searchParams.set("task", taskId);
+            window.history.replaceState({}, "", url);
+        };
+
+        const openExistingTask = async (taskId) => {
+            setTaskInUrl(taskId);
+            const response = await fetch(`/api/tasks/${taskId}`, {
+                cache: "no-store",
+                credentials: "same-origin",
+            });
+
+            if (response.status === 401) {
+                window.location.replace("/login");
+                return;
+            }
+
+            const task = await response.json();
+            if (!response.ok) {
+                throw new Error(task.detail || "无法读取任务");
+            }
+
+            updateDetails(task);
+
+            if (task.status === "completed") {
+                renderComparison(task);
+                setStatus("处理完成", "已恢复历史任务结果。", "success");
+                return;
+            }
+
+            if (task.status === "failed") {
+                setStatus("处理失败", task.error || "任务处理失败", "error");
+                return;
+            }
+
+            setStatus(
+                STATUS_LABELS[task.status] || "处理中",
+                "正在恢复任务状态。",
+                "busy",
+            );
+            await pollTask(task.id);
+        };
+
         input.addEventListener("change", () => {
             const file = input.files?.[0];
             if (!file) return;
@@ -363,6 +413,7 @@
                 }
 
                 updateDetails(task);
+                setTaskInUrl(task.id);
                 setStatus("任务已创建", "服务器开始处理图片。", "busy");
 
                 submitButton.textContent = "正在处理";
@@ -376,6 +427,13 @@
         });
 
         checkHealth();
+
+        const queryTaskId = new URLSearchParams(window.location.search).get("task");
+        if (queryTaskId) {
+            openExistingTask(queryTaskId).catch((error) => {
+                setStatus("任务恢复失败", error.message, "error");
+            });
+        }
     </script>
 </body>
 </html>

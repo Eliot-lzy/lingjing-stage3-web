@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>登录 | 灵境视觉方案对比</title>
+    <link rel="stylesheet" href="{{ url_for('static', path='/auth.css') }}">
+</head>
+<body class="auth-page">
+    <main class="auth-shell">
+        <section class="auth-brand">
+            <p class="auth-eyebrow">LINGJING STAGE 03</p>
+            <h1>视觉方案对比</h1>
+            <p>登录后创建任务，并查看自己的历史结果。</p>
+        </section>
+
+        <section class="auth-form-panel">
+            <div class="auth-tabs" role="tablist" aria-label="登录或注册">
+                <button
+                    id="login-tab"
+                    class="auth-tab is-active"
+                    type="button"
+                    role="tab"
+                    aria-selected="true"
+                >
+                    登录
+                </button>
+                <button
+                    id="register-tab"
+                    class="auth-tab"
+                    type="button"
+                    role="tab"
+                    aria-selected="false"
+                >
+                    注册
+                </button>
+            </div>
+
+            <form id="auth-form">
+                <label class="field-label" for="email">邮箱</label>
+                <input
+                    id="email"
+                    class="text-input"
+                    name="email"
+                    type="email"
+                    autocomplete="email"
+                    required
+                >
+
+                <label class="field-label" for="password">密码</label>
+                <input
+                    id="password"
+                    class="text-input"
+                    name="password"
+                    type="password"
+                    autocomplete="current-password"
+                    minlength="8"
+                    maxlength="128"
+                    required
+                >
+
+                <button id="auth-submit" class="auth-submit" type="submit">
+                    登录
+                </button>
+            </form>
+
+            <p id="auth-message" class="auth-message" aria-live="polite"></p>
+        </section>
+    </main>
+
+    <script>
+        const form = document.getElementById("auth-form");
+        const emailInput = document.getElementById("email");
+        const passwordInput = document.getElementById("password");
+        const loginTab = document.getElementById("login-tab");
+        const registerTab = document.getElementById("register-tab");
+        const submitButton = document.getElementById("auth-submit");
+        const message = document.getElementById("auth-message");
+
+        let mode = "login";
+
+        const setMode = (nextMode) => {
+            mode = nextMode;
+            const isLogin = mode === "login";
+
+            loginTab.classList.toggle("is-active", isLogin);
+            registerTab.classList.toggle("is-active", !isLogin);
+            loginTab.setAttribute("aria-selected", String(isLogin));
+            registerTab.setAttribute("aria-selected", String(!isLogin));
+            submitButton.textContent = isLogin ? "登录" : "创建账号";
+            passwordInput.autocomplete = isLogin
+                ? "current-password"
+                : "new-password";
+            message.textContent = "";
+        };
+
+        loginTab.addEventListener("click", () => setMode("login"));
+        registerTab.addEventListener("click", () => setMode("register"));
+
+        form.addEventListener("submit", async (event) => {
+            event.preventDefault();
+            submitButton.disabled = true;
+            message.textContent = "";
+
+            const endpoint = mode === "login"
+                ? "/api/auth/login"
+                : "/api/auth/register";
+
+            try {
+                const response = await fetch(endpoint, {
+                    method: "POST",
+                    credentials: "same-origin",
+                    headers: {"Content-Type": "application/json"},
+                    body: JSON.stringify({
+                        email: emailInput.value.trim(),
+                        password: passwordInput.value,
+                    }),
+                });
+                const payload = await response.json();
+
+                if (!response.ok) {
+                    throw new Error(payload.detail || "认证失败");
+                }
+
+                window.location.replace("/");
+            } catch (error) {
+                message.textContent = error.message;
+            } finally {
+                submitButton.disabled = false;
+            }
+        });
+
+        fetch("/api/auth/me", {
+            credentials: "same-origin",
+            cache: "no-store",
+        }).then((response) => {
+            if (response.ok) {
+                window.location.replace("/");
+            }
+        }).catch(() => {});
+    </script>
+</body>
+</html>

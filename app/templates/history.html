@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>历史任务 | 灵境视觉方案对比</title>
+    <link rel="stylesheet" href="{{ url_for('static', path='/auth.css') }}">
+</head>
+<body class="history-page">
+    <header class="history-header">
+        <div class="history-header-inner">
+            <div>
+                <p class="auth-eyebrow">LINGJING STAGE 03</p>
+                <h1>历史任务</h1>
+            </div>
+            <div class="history-header-actions">
+                <span class="user-label">{{ user_email }}</span>
+                <a class="header-link" href="/">返回对比</a>
+                <a class="header-link" href="/logout">退出</a>
+            </div>
+        </div>
+    </header>
+
+    <main class="history-shell">
+        <div class="history-toolbar">
+            <p id="history-summary">正在读取任务...</p>
+            <button id="refresh-button" class="secondary-button" type="button">
+                刷新
+            </button>
+        </div>
+
+        <p id="history-message" class="auth-message" aria-live="polite"></p>
+        <section id="history-list" class="history-list"></section>
+    </main>
+
+    <script>
+        const historyList = document.getElementById("history-list");
+        const historySummary = document.getElementById("history-summary");
+        const historyMessage = document.getElementById("history-message");
+        const refreshButton = document.getElementById("refresh-button");
+
+        const STATUS_LABELS = {
+            queued: "排队中",
+            processing: "处理中",
+            completed: "已完成",
+            failed: "失败",
+        };
+
+        const formatDate = (value) => {
+            if (!value) return "-";
+            const date = new Date(value);
+            return Number.isNaN(date.getTime())
+                ? value
+                : date.toLocaleString("zh-CN", {hour12: false});
+        };
+
+        const handleUnauthorized = (response) => {
+            if (response.status === 401) {
+                window.location.replace("/login");
+                throw new Error("登录已过期");
+            }
+        };
+
+        const createActionButton = (label, className, handler) => {
+            const button = document.createElement("button");
+            button.type = "button";
+            button.className = className;
+            button.textContent = label;
+            button.addEventListener("click", handler);
+            return button;
+        };
+
+        const buildTaskItem = (task) => {
+            const article = document.createElement("article");
+            article.className = "history-item";
+
+            const main = document.createElement("div");
+            main.className = "history-main";
+
+            const title = document.createElement("h2");
+            title.textContent = task.title || task.original_name || "未命名任务";
+
+            const meta = document.createElement("p");
+            meta.textContent =
+                `${formatDate(task.updated_at)} · ${task.width} × ${task.height}`;
+
+            main.append(title, meta);
+
+            const status = document.createElement("span");
+            status.className = `task-status status-${task.status}`;
+            status.textContent = STATUS_LABELS[task.status] || task.status;
+
+            const stats = document.createElement("div");
+            stats.className = "history-stats";
+            stats.textContent =
+                `传统目标 ${task.object_count ?? 0} · 大模型物品 ${task.item_count ?? 0}`;
+
+            if (task.error) {
+                const error = document.createElement("p");
+                error.className = "history-error";
+                error.textContent = task.error;
+                main.append(error);
+            }
+
+            const actions = document.createElement("div");
+            actions.className = "history-actions";
+
+            const openLink = document.createElement("a");
+            openLink.className = "task-link";
+            openLink.href = `/?task=${encodeURIComponent(task.id)}`;
+            openLink.textContent = "查看结果";
+            actions.append(openLink);
+
+            const renameButton = createActionButton(
+                "重命名",
+                "secondary-button compact-button",
+                async () => {
+                    const nextTitle = window.prompt(
+                        "输入新的任务名称",
+                        task.title || task.original_name,
+                    );
+                    if (nextTitle === null) return;
+                    const trimmed = nextTitle.trim();
+                    if (!trimmed) {
+                        historyMessage.textContent = "任务名称不能为空。";
+                        return;
+                    }
+
+                    const response = await fetch(
+                        `/api/tasks/${encodeURIComponent(task.id)}`,
+                        {
+                            method: "PATCH",
+                            credentials: "same-origin",
+                            headers: {"Content-Type": "application/json"},
+                            body: JSON.stringify({title: trimmed}),
+                        },
+                    );
+                    handleUnauthorized(response);
+                    const payload = await response.json();
+                    if (!response.ok) {
+                        historyMessage.textContent = payload.detail || "重命名失败";
+                        return;
+                    }
+                    historyMessage.textContent = "任务已重命名。";
+                    await loadTasks();
+                },
+            );
+
+            const deleteButton = createActionButton(
+                "删除",
+                "danger-button compact-button",
+                async () => {
+                    if (!window.confirm(`确认删除任务“${task.title}”？`)) return;
+
+                    const response = await fetch(
+                        `/api/tasks/${encodeURIComponent(task.id)}`,
+                        {
+                            method: "DELETE",
+                            credentials: "same-origin",
+                        },
+                    );
+                    handleUnauthorized(response);
+                    if (!response.ok) {
+                        let detail = "删除失败";
+                        try {
+                            const payload = await response.json();
+                            detail = payload.detail || detail;
+                        } catch {}
+                        historyMessage.textContent = detail;
+                        return;
+                    }
+                    historyMessage.textContent = "任务已删除。";
+                    await loadTasks();
+                },
+            );
+
+            actions.append(renameButton, deleteButton);
+            article.append(main, status, stats, actions);
+            return article;
+        };
+
+        async function loadTasks() {
+            refreshButton.disabled = true;
+            historyMessage.textContent = "";
+
+            try {
+                const response = await fetch("/api/tasks?limit=100", {
+                    credentials: "same-origin",
+                    cache: "no-store",
+                });
+                handleUnauthorized(response);
+                const payload = await response.json();
+                if (!response.ok) {
+                    throw new Error(payload.detail || "读取历史任务失败");
+                }
+
+                historyList.innerHTML = "";
+                historySummary.textContent = `共 ${payload.total} 个任务`;
+
+                if (payload.tasks.length === 0) {
+                    const empty = document.createElement("p");
+                    empty.className = "history-empty";
+                    empty.textContent = "还没有历史任务。";
+                    historyList.append(empty);
+                    return;
+                }
+
+                payload.tasks.forEach((task) => {
+                    historyList.append(buildTaskItem(task));
+                });
+            } catch (error) {
+                historyMessage.textContent = error.message;
+            } finally {
+                refreshButton.disabled = false;
+            }
+        }
+
+        refreshButton.addEventListener("click", loadTasks);
+        loadTasks();
+    </script>
+</body>
+</html>
