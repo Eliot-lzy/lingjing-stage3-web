@@ -154,7 +154,7 @@ def delete_safe_file(path: Path, root: Path) -> None:
         resolved_path.unlink(missing_ok=True)
 
 
-@app.get("/login", response_class=HTMLResponse)
+@app.get("/login", response_class=HTMLResponse, response_model=None)
 async def login_page(
     request: Request,
     user: User | None = Depends(get_optional_user),
@@ -168,7 +168,7 @@ async def login_page(
     )
 
 
-@app.get("/", response_class=HTMLResponse)
+@app.get("/", response_class=HTMLResponse, response_model=None)
 async def index(
     request: Request,
     user: User | None = Depends(get_optional_user),
@@ -185,7 +185,7 @@ async def index(
     )
 
 
-@app.get("/history", response_class=HTMLResponse)
+@app.get("/history", response_class=HTMLResponse, response_model=None)
 async def history_page(
     request: Request,
     user: User | None = Depends(get_optional_user),
